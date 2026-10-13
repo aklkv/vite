@@ -249,10 +249,25 @@ export function createDepsOptimizer(
               // Add these dependencies to the discovered list, as these are currently
               // used by the preAliasPlugin to support aliased and optimized deps.
               // This is also used by the CJS externalization heuristics in legacy mode
+              const scannedDeps: Record<string, string> = {}
               for (const id of Object.keys(deps)) {
                 if (!metadata.discovered[id]) {
-                  addMissingDep(id, deps[id])
+                  scannedDeps[id] = deps[id]
                 }
+              }
+              // Hash the batch once: hashing every discovered dep again for
+              // each one added is quadratic, and takes tens of seconds for a
+              // scan that finds thousands of deps
+              const browserHash = getDiscoveredBrowserHash(
+                metadata.hash,
+                depsFromOptimizedDepInfo(metadata.optimized),
+                {
+                  ...depsFromOptimizedDepInfo(metadata.discovered),
+                  ...scannedDeps,
+                },
+              )
+              for (const id in scannedDeps) {
+                addMissingDep(id, scannedDeps[id], browserHash)
               }
 
               const knownDeps = prepareKnownDeps()
@@ -598,22 +613,26 @@ export function createDepsOptimizer(
     return missing
   }
 
-  function addMissingDep(id: string, resolved: string) {
+  function addMissingDep(
+    id: string,
+    resolved: string,
+    // Adding a browserHash to this missing dependency that is unique to
+    // the current state of known + missing deps. If its optimizeDeps run
+    // doesn't alter the bundled files of previous known dependencies,
+    // we don't need a full reload and this browserHash will be kept
+    browserHash = getDiscoveredBrowserHash(
+      metadata.hash,
+      depsFromOptimizedDepInfo(metadata.optimized),
+      depsFromOptimizedDepInfo(metadata.discovered),
+    ),
+  ) {
     newDepsDiscovered = true
 
     return addOptimizedDepInfo(metadata, 'discovered', {
       id,
       file: getOptimizedDepPath(environment, id),
       src: resolved,
-      // Adding a browserHash to this missing dependency that is unique to
-      // the current state of known + missing deps. If its optimizeDeps run
-      // doesn't alter the bundled files of previous known dependencies,
-      // we don't need a full reload and this browserHash will be kept
-      browserHash: getDiscoveredBrowserHash(
-        metadata.hash,
-        depsFromOptimizedDepInfo(metadata.optimized),
-        depsFromOptimizedDepInfo(metadata.discovered),
-      ),
+      browserHash,
       // loading of this pre-bundled dep needs to await for its processing
       // promise to be resolved
       processing: depOptimizationProcessing.promise,
